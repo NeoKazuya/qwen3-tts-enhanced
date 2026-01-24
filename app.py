@@ -544,7 +544,7 @@ with gr.Blocks(title="Qwen3-TTS Enhanced", theme=gr.themes.Soft(), analytics_ena
                     
                 with gr.Column():
                     gr.Markdown("### Generate Speech")
-                    vc_text = gr.Textbox(label="Text to Speak", lines=4, placeholder="Enter what you want the voice to say... (tip: add *emotion* cues in text)")
+                    vc_text = gr.Textbox(label="Text to Speak", lines=4, placeholder="Enter what you want the voice to say...")
                     with gr.Row():
                         vc_lang = gr.Dropdown(label="Language", choices=LANGUAGES, value="English", scale=2)
                         vc_variations = gr.Slider(label="Variations", minimum=1, maximum=5, value=1, step=1, scale=1)
