@@ -18,11 +18,24 @@ set "VENV_DIR=%~dp0venv"
 :: ========== STEP 1: Find or Download Python ==========
 echo [1/4] Checking Python...
 
-:: Check if we already have embedded Python
-if exist "%PYTHON_DIR%\python.exe" (
-    echo       Found embedded Python in .\python\
-    set "PYTHON_EXE=%PYTHON_DIR%\python.exe"
+:: Check if we have an existing venv (previous install)
+if exist "%VENV_DIR%\Scripts\python.exe" (
+    echo       Found existing virtual environment
+    set "USE_VENV=1"
+    set "PYTHON_EXE=%VENV_DIR%\Scripts\python.exe"
+    set "PIP_EXE=%VENV_DIR%\Scripts\pip.exe"
     goto :check_gpu
+)
+
+:: Check if we already have embedded Python with packages installed
+if exist "%PYTHON_DIR%\python.exe" (
+    if exist "%PYTHON_DIR%\Scripts\pip.exe" (
+        echo       Found embedded Python in .\python\
+        set "USE_VENV=0"
+        set "PYTHON_EXE=%PYTHON_DIR%\python.exe"
+        set "PIP_EXE=%PYTHON_DIR%\Scripts\pip.exe"
+        goto :check_gpu
+    )
 )
 
 :: Check system Python version
@@ -38,14 +51,20 @@ if %errorlevel% equ 0 (
     if !PY_MAJOR! equ 3 (
         if !PY_MINOR! geq 10 if !PY_MINOR! leq 12 (
             echo       Found compatible Python !SYS_PY_VER! in PATH
-            set "PYTHON_EXE=python"
-            goto :check_gpu
+            echo       Creating virtual environment...
+            python -m venv "%VENV_DIR%"
+            if exist "%VENV_DIR%\Scripts\python.exe" (
+                set "USE_VENV=1"
+                set "PYTHON_EXE=%VENV_DIR%\Scripts\python.exe"
+                set "PIP_EXE=%VENV_DIR%\Scripts\pip.exe"
+                goto :check_gpu
+            )
         )
     )
     echo       System Python !SYS_PY_VER! not compatible ^(need 3.10-3.12^)
 )
 
-:: Download embedded Python
+:: Download embedded Python (no venv support, but self-contained)
 echo       Downloading Python %PYTHON_VERSION%...
 echo.
 echo       This is a portable Python that won't affect your system.
@@ -81,10 +100,9 @@ echo       Extracting...
 powershell -Command "Expand-Archive -Path '%PYTHON_DIR%\python.zip' -DestinationPath '%PYTHON_DIR%' -Force"
 del "%PYTHON_DIR%\python.zip"
 
-:: Enable pip by modifying the ._pth file
-:: Find the pth file (e.g., python312._pth)
+:: Enable pip by modifying the ._pth file (remove 'import site' comment)
 for %%f in ("%PYTHON_DIR%\python*._pth") do (
-    echo python312.zip>> "%%f"
+    echo python312.zip> "%%f"
     echo .>> "%%f"
     echo import site>> "%%f"
 )
@@ -92,11 +110,13 @@ for %%f in ("%PYTHON_DIR%\python*._pth") do (
 :: Download and install pip
 echo       Installing pip...
 powershell -Command "& {[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '%GET_PIP_URL%' -OutFile '%PYTHON_DIR%\get-pip.py' -UseBasicParsing}"
-"%PYTHON_DIR%\python.exe" "%PYTHON_DIR%\get-pip.py" --no-warn-script-location >nul 2>&1
+"%PYTHON_DIR%\python.exe" "%PYTHON_DIR%\get-pip.py" --no-warn-script-location
 del "%PYTHON_DIR%\get-pip.py"
 
 echo       Python %PYTHON_VERSION% installed successfully!
+set "USE_VENV=0"
 set "PYTHON_EXE=%PYTHON_DIR%\python.exe"
+set "PIP_EXE=%PYTHON_DIR%\Scripts\pip.exe"
 
 :: ========== STEP 2: Check GPU ==========
 :check_gpu
@@ -109,26 +129,13 @@ if errorlevel 1 (
     echo.
 )
 
-:: ========== STEP 3: Create Virtual Environment ==========
-echo [3/4] Setting up environment...
-
-if not exist "%VENV_DIR%" (
-    echo       Creating virtual environment...
-    "%PYTHON_EXE%" -m venv "%VENV_DIR%"
-    if %errorlevel% neq 0 (
-        echo ERROR: Failed to create virtual environment.
-        pause
-        exit /b 1
-    )
+:: ========== STEP 3: Environment Info ==========
+echo [3/4] Environment ready
+if "!USE_VENV!"=="1" (
+    echo       Using virtual environment in .\venv\
 ) else (
-    echo       Virtual environment exists, skipping...
+    echo       Using embedded Python in .\python\
 )
-
-:: Activate venv
-call "%VENV_DIR%\Scripts\activate.bat"
-
-:: Upgrade pip quietly
-python -m pip install --upgrade pip >nul 2>&1
 
 :: ========== STEP 4: Install Dependencies ==========
 echo.
@@ -138,7 +145,7 @@ echo.
 
 :: Install PyTorch with CUDA first (most critical)
 echo       [4a] PyTorch + CUDA 12.4...
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
+"!PIP_EXE!" install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
 if %errorlevel% neq 0 (
     echo.
     echo ERROR: PyTorch installation failed.
@@ -150,7 +157,7 @@ if %errorlevel% neq 0 (
 :: Install other dependencies
 echo.
 echo       [4b] Qwen-TTS and dependencies...
-pip install qwen-tts gradio noisereduce platformdirs matplotlib
+"!PIP_EXE!" install qwen-tts gradio noisereduce platformdirs matplotlib
 if %errorlevel% neq 0 (
     echo.
     echo ERROR: Dependency installation failed.

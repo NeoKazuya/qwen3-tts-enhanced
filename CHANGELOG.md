@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.1 - 2026-01-25
+
+- Fixed embedded Python install (venv module not included in embeddable package)
+
 ## 1.2.0 - 2026-01-25
 
 - Portable Python auto-installer (downloads Python 3.12.8 if needed)
