@@ -8,3 +8,6 @@ gradio
 soundfile
 numpy
 noisereduce
+
+# Utilities
+platformdirs

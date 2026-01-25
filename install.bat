@@ -37,7 +37,7 @@ pip install --upgrade pip >nul 2>&1
 pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
 
 echo [3/3] Installing Qwen-TTS and dependencies...
-pip install qwen-tts gradio noisereduce
+pip install qwen-tts gradio noisereduce platformdirs
 
 :: Install ffmpeg if not present
 where ffmpeg >nul 2>&1

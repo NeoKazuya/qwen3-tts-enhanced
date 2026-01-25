@@ -4,8 +4,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./saved_voices:/app/saved_voices
-      - ./outputs:/app/outputs
+      - ./data:/app/data # Persistent data (saved_voices, outputs)
       - hf_cache:/root/.cache/huggingface
     deploy:
       resources:

@@ -17,6 +17,7 @@ import numpy as np
 import pickle
 import shutil
 import os
+import tempfile
 from pathlib import Path
 from datetime import datetime
 
@@ -25,10 +26,78 @@ clone_model = None
 custom_model = None
 design_model = None
 
-VOICES_DIR = Path("saved_voices")
+# App name for data directories
+APP_NAME = "Qwen3-TTS-Enhanced"
+
+def get_default_data_dir():
+    """Get the default platform-specific data directory."""
+    try:
+        from platformdirs import user_data_dir
+        return Path(user_data_dir(APP_NAME, appauthor=False))
+    except ImportError:
+        if os.name == "nt":
+            base = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
+            return Path(base) / APP_NAME
+        else:
+            return Path.home() / ".local" / "share" / APP_NAME.lower()
+
+def get_config_path():
+    """Config file stored in default location (not custom location)."""
+    return get_default_data_dir() / "config.json"
+
+def load_config():
+    """Load config from JSON file."""
+    config_path = get_config_path()
+    if config_path.exists():
+        try:
+            import json
+            with open(config_path) as f:
+                return json.load(f)
+        except:
+            pass
+    return {}
+
+def save_config(config):
+    """Save config to JSON file."""
+    import json
+    config_path = get_config_path()
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(config_path, "w") as f:
+        json.dump(config, f, indent=2)
+
+def get_data_dir():
+    """Get the user data directory for persistent storage.
+    
+    Priority:
+    1. QWEN_TTS_DATA_DIR environment variable
+    2. Custom path from config.json
+    3. Platform-specific default
+    """
+    # Check env var first
+    env_dir = os.environ.get("QWEN_TTS_DATA_DIR")
+    if env_dir:
+        return Path(env_dir)
+    
+    # Check config file
+    config = load_config()
+    if config.get("data_dir"):
+        return Path(config["data_dir"])
+    
+    # Fall back to default
+    return get_default_data_dir()
+
+# Data directories (persistent, outside app folder)
+DATA_DIR = get_data_dir()
+VOICES_DIR = DATA_DIR / "saved_voices"
+OUTPUTS_DIR = DATA_DIR / "outputs"
+
+# Create directories
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 VOICES_DIR.mkdir(exist_ok=True)
-OUTPUTS_DIR = Path("outputs")
 OUTPUTS_DIR.mkdir(exist_ok=True)
+
+# Log data location on startup
+print(f"Data directory: {DATA_DIR}")
 
 # Preset speakers for CustomVoice model
 SPEAKERS = [
@@ -98,22 +167,36 @@ def sanitize_filename(text, max_len=30):
     return clean[:max_len].strip('_')
 
 
-def save_audio(wav, sr, prefix="output", text=""):
-    """Save generated audio to outputs folder with descriptive name."""
+def save_audio(wav, sr, prefix="output", text="", auto_save=True):
+    """Save generated audio. If auto_save=False, saves to temp directory."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     text_part = f"_{sanitize_filename(text)}" if text else ""
-    path = OUTPUTS_DIR / f"{prefix}{text_part}_{timestamp}.wav"
+    filename = f"{prefix}{text_part}_{timestamp}.wav"
+    
+    if auto_save:
+        path = OUTPUTS_DIR / filename
+    else:
+        # Use system temp dir - Gradio's delete_cache handles cleanup
+        path = Path(tempfile.gettempdir()) / filename
+    
     sf.write(str(path), wav, sr)
     return str(path)
 
 
-def save_multiple_audio(wavs, sr, prefix="output", text=""):
-    """Save multiple audio variations to outputs folder with descriptive names."""
+def save_multiple_audio(wavs, sr, prefix="output", text="", auto_save=True):
+    """Save multiple audio variations. If auto_save=False, saves to temp directory."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     text_part = f"_{sanitize_filename(text)}" if text else ""
     paths = []
+    
+    if auto_save:
+        save_dir = OUTPUTS_DIR
+    else:
+        # Use system temp dir - Gradio's delete_cache handles cleanup
+        save_dir = Path(tempfile.gettempdir())
+    
     for i, wav in enumerate(wavs):
-        path = OUTPUTS_DIR / f"{prefix}{text_part}_{timestamp}_v{i+1}.wav"
+        path = save_dir / f"{prefix}{text_part}_{timestamp}_v{i+1}.wav"
         sf.write(str(path), wav, sr)
         paths.append(str(path))
     return paths
@@ -231,7 +314,7 @@ def get_voice_value(label):
 
 
 # ==================== VOICE CLONE ====================
-def clone_generate(text, language, saved_voice_label, ref_audio, ref_text, num_variations):
+def clone_generate(text, language, saved_voice_label, ref_audio, ref_text, num_variations, auto_save):
     """Generate speech using saved voice or new reference."""
     if not text.strip():
         return gr.update(visible=True), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), "❌ Enter text to generate"
@@ -269,7 +352,7 @@ def clone_generate(text, language, saved_voice_label, ref_audio, ref_text, num_v
         
         # Save all variations
         voice_name = saved_voice if saved_voice else "clone"
-        paths = save_multiple_audio(all_wavs, sr, voice_name, text)
+        paths = save_multiple_audio(all_wavs, sr, voice_name, text, auto_save=auto_save)
         
         # Return audio with visibility - only show players that have content
         results = []
@@ -417,7 +500,7 @@ def create_voice_multi_ref(name, audio1, text1, audio2, text2, audio3, text3, au
 
 
 # ==================== CUSTOM VOICE ====================
-def custom_generate(text, language, speaker, instruct, num_variations):
+def custom_generate(text, language, speaker, instruct, num_variations, auto_save):
     """Generate speech with preset speaker."""
     if not text.strip():
         return gr.update(visible=True), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), "❌ Enter text to generate"
@@ -434,7 +517,7 @@ def custom_generate(text, language, speaker, instruct, num_variations):
             )
             all_wavs.append(wavs[0])
         
-        paths = save_multiple_audio(all_wavs, sr, f"{speaker}", text)
+        paths = save_multiple_audio(all_wavs, sr, f"{speaker}", text, auto_save=auto_save)
         results = []
         for i in range(5):
             if i < len(paths):
@@ -447,7 +530,7 @@ def custom_generate(text, language, speaker, instruct, num_variations):
 
 
 # ==================== VOICE DESIGN ====================
-def design_generate(text, language, instruct, num_variations):
+def design_generate(text, language, instruct, num_variations, auto_save):
     """Generate speech with designed voice."""
     if not text.strip():
         return gr.update(visible=True), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), "❌ Enter text to generate"
@@ -465,7 +548,7 @@ def design_generate(text, language, instruct, num_variations):
             )
             all_wavs.append(wavs[0])
         
-        paths = save_multiple_audio(all_wavs, sr, "design", text)
+        paths = save_multiple_audio(all_wavs, sr, "design", text, auto_save=auto_save)
         results = []
         for i in range(5):
             if i < len(paths):
@@ -516,7 +599,8 @@ def design_and_save(name, sample_text, language, instruct):
 
 
 # ==================== BUILD UI ====================
-with gr.Blocks(title="Qwen3-TTS Enhanced", theme=gr.themes.Soft(), analytics_enabled=False) as app:
+# delete_cache: (frequency_seconds, age_seconds) - cleans cache hourly for files older than 1 hour
+with gr.Blocks(title="Qwen3-TTS Enhanced", theme=gr.themes.Soft(), analytics_enabled=False, delete_cache=(3600, 3600)) as app:
     gr.Markdown("# 🎙️ Qwen3-TTS Enhanced")
     gr.Markdown("**Clone voices, create new ones, generate speech - 100% local.**")
     
@@ -548,6 +632,7 @@ with gr.Blocks(title="Qwen3-TTS Enhanced", theme=gr.themes.Soft(), analytics_ena
                     with gr.Row():
                         vc_lang = gr.Dropdown(label="Language", choices=LANGUAGES, value="English", scale=2)
                         vc_variations = gr.Slider(label="Variations", minimum=1, maximum=5, value=1, step=1, scale=1)
+                    vc_auto_save = gr.Checkbox(label="💾 Auto-save", value=False, info=f"Saves to: {OUTPUTS_DIR}")
                     vc_gen_btn = gr.Button("🎤 Generate Speech", variant="primary", size="lg")
                     vc_status = gr.Textbox(label="Status", interactive=False)
                     
@@ -563,7 +648,7 @@ with gr.Blocks(title="Qwen3-TTS Enhanced", theme=gr.themes.Soft(), analytics_ena
             # Wire up events
             vc_gen_btn.click(
                 clone_generate, 
-                [vc_text, vc_lang, vc_saved, vc_ref_audio, vc_ref_text, vc_variations], 
+                [vc_text, vc_lang, vc_saved, vc_ref_audio, vc_ref_text, vc_variations, vc_auto_save], 
                 [vc_audio1, vc_audio2, vc_audio3, vc_audio4, vc_audio5, vc_status]
             )
             vc_save_btn.click(clone_save, [vc_save_name, vc_ref_audio, vc_ref_text], [vc_save_status, vc_saved])
@@ -586,6 +671,7 @@ with gr.Blocks(title="Qwen3-TTS Enhanced", theme=gr.themes.Soft(), analytics_ena
                     with gr.Row():
                         cv_lang = gr.Dropdown(label="Language", choices=LANGUAGES, value="English", scale=2)
                         cv_variations = gr.Slider(label="Variations", minimum=1, maximum=5, value=1, step=1, scale=1)
+                    cv_auto_save = gr.Checkbox(label="💾 Auto-save", value=False, info=f"Saves to: {OUTPUTS_DIR}")
                     cv_btn = gr.Button("🎤 Generate Speech", variant="primary", size="lg")
                     cv_status = gr.Textbox(label="Status", interactive=False)
             
@@ -600,7 +686,7 @@ with gr.Blocks(title="Qwen3-TTS Enhanced", theme=gr.themes.Soft(), analytics_ena
             
             cv_btn.click(
                 custom_generate, 
-                [cv_text, cv_lang, cv_speaker, cv_instruct, cv_variations], 
+                [cv_text, cv_lang, cv_speaker, cv_instruct, cv_variations, cv_auto_save], 
                 [cv_audio1, cv_audio2, cv_audio3, cv_audio4, cv_audio5, cv_status]
             )
 
@@ -619,6 +705,7 @@ with gr.Blocks(title="Qwen3-TTS Enhanced", theme=gr.themes.Soft(), analytics_ena
                     with gr.Row():
                         vd_lang = gr.Dropdown(label="Language", choices=LANGUAGES, value="English", scale=2)
                         vd_variations = gr.Slider(label="Variations", minimum=1, maximum=5, value=1, step=1, scale=1)
+                    vd_auto_save = gr.Checkbox(label="💾 Auto-save", value=False, info=f"Saves to: {OUTPUTS_DIR}")
                     vd_btn = gr.Button("✨ Generate Speech", variant="primary", size="lg")
                     vd_status = gr.Textbox(label="Status", interactive=False)
             
@@ -633,7 +720,7 @@ with gr.Blocks(title="Qwen3-TTS Enhanced", theme=gr.themes.Soft(), analytics_ena
             
             vd_btn.click(
                 design_generate, 
-                [vd_text, vd_lang, vd_instruct, vd_variations], 
+                [vd_text, vd_lang, vd_instruct, vd_variations, vd_auto_save], 
                 [vd_audio1, vd_audio2, vd_audio3, vd_audio4, vd_audio5, vd_status]
             )
             
@@ -705,7 +792,22 @@ with gr.Blocks(title="Qwen3-TTS Enhanced", theme=gr.themes.Soft(), analytics_ena
         # ===== SAVED VOICES TAB =====
         with gr.TabItem("📁 Saved Voices"):
             gr.Markdown("### Your Saved Voices")
-            gr.Markdown("Voices are saved in `saved_voices/` folder.")
+            
+            with gr.Row():
+                with gr.Column(scale=3):
+                    gr.Markdown(f"**Location**: `{VOICES_DIR}`")
+                with gr.Column(scale=1):
+                    def open_voices_folder():
+                        import subprocess
+                        import sys
+                        if sys.platform == "win32":
+                            subprocess.run(["explorer", str(VOICES_DIR)])
+                        elif sys.platform == "darwin":
+                            subprocess.run(["open", str(VOICES_DIR)])
+                        else:
+                            subprocess.run(["xdg-open", str(VOICES_DIR)])
+                    voices_folder_btn = gr.Button("📂 Open Folder", size="sm")
+                    voices_folder_btn.click(open_voices_folder)
             
             def list_voices():
                 voices = []
@@ -728,6 +830,93 @@ with gr.Blocks(title="Qwen3-TTS Enhanced", theme=gr.themes.Soft(), analytics_ena
             )
             refresh_btn = gr.Button("🔄 Refresh List")
             refresh_btn.click(list_voices, outputs=[voices_table])
+            
+            gr.Markdown("""
+---
+**Tip**: Voices are saved when you:
+- Use **Save Voice** in Voice Clone tab
+- Use **Create Voice** tab to combine multiple samples
+- Use **Design & Save** in Voice Design tab
+            """)
+
+        # ===== SETTINGS TAB =====
+        with gr.TabItem("⚙️ Settings"):
+            gr.Markdown("### Data Storage")
+            gr.Markdown(f"Current location:")
+            gr.Code(str(DATA_DIR), language=None, label="Data Folder")
+            
+            def open_data_folder():
+                import subprocess
+                import sys
+                if sys.platform == "win32":
+                    subprocess.run(["explorer", str(DATA_DIR)])
+                elif sys.platform == "darwin":
+                    subprocess.run(["open", str(DATA_DIR)])
+                else:
+                    subprocess.run(["xdg-open", str(DATA_DIR)])
+                return "📂 Opened"
+            
+            open_btn = gr.Button("📂 Open Folder", variant="secondary")
+            open_status = gr.Textbox(label="", visible=False)
+            open_btn.click(open_data_folder, outputs=[open_status])
+            
+            gr.Markdown("---")
+            gr.Markdown("### Change Location")
+            
+            config = load_config()
+            current_custom = config.get("data_dir", "")
+            
+            custom_path = gr.Textbox(
+                label="Custom Data Folder", 
+                value=current_custom,
+                placeholder="Leave empty to use default location",
+                info="Enter a folder path, or leave empty for default"
+            )
+            
+            def save_custom_path(path):
+                path = path.strip()
+                config = load_config()
+                if path:
+                    # Validate path is writable
+                    try:
+                        test_dir = Path(path)
+                        test_dir.mkdir(parents=True, exist_ok=True)
+                        config["data_dir"] = str(test_dir)
+                        save_config(config)
+                        return "✅ Saved! Restart app to apply changes."
+                    except Exception as e:
+                        return f"❌ Invalid path: {e}"
+                else:
+                    if "data_dir" in config:
+                        del config["data_dir"]
+                        save_config(config)
+                    return "✅ Reset to default. Restart app to apply."
+            
+            def reset_to_default():
+                config = load_config()
+                if "data_dir" in config:
+                    del config["data_dir"]
+                    save_config(config)
+                return "", "✅ Reset to default. Restart app to apply."
+            
+            with gr.Row():
+                save_path_btn = gr.Button("💾 Save", variant="primary")
+                reset_path_btn = gr.Button("🔄 Reset to Default", variant="secondary")
+            
+            path_status = gr.Textbox(label="Status", interactive=False)
+            
+            save_path_btn.click(save_custom_path, [custom_path], [path_status])
+            reset_path_btn.click(reset_to_default, outputs=[custom_path, path_status])
+            
+            gr.Markdown(f"""
+---
+### What's in the data folder?
+- **saved_voices/** - Your cloned and designed voice files
+- **outputs/** - Generated audio (when "Save generated audio" is enabled)
+- **config.json** - Your settings
+
+**Default location**: `{get_default_data_dir()}`
+            """)
 
 
 if __name__ == "__main__":
