@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.0 - 2026-01-25
+
+- Portable Python auto-installer (downloads Python 3.12.8 if needed)
+- SHA256 hash verification for Python download security
+- Fixed matplotlib missing error (#2)
+- Fixed Python 3.14 compatibility issue (#1)
+- Docker now uses Python 3.12 (matches Windows)
+- Better install progress messages and error handling
+
 ## 1.1.0 - 2026-01-24
 
 - Settings tab with custom data folder (GUI-configurable, no env vars needed)

@@ -11,3 +11,4 @@ noisereduce
 
 # Utilities
 platformdirs
+matplotlib
