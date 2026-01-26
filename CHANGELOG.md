@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.3 - 2026-01-25
+
+- Fixed portable Python hash verification parsing (#3)
+
 ## 1.2.2 - 2026-01-25
 
 - Fixed Gradio 6.0 file access error for saved voices

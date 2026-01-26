@@ -84,7 +84,15 @@ if %errorlevel% neq 0 (
 
 :: Verify SHA256 hash for security
 echo       Verifying download...
-for /f %%h in ('powershell -Command "(Get-FileHash '%PYTHON_DIR%\python.zip' -Algorithm SHA256).Hash"') do set "DOWNLOAD_HASH=%%h"
+:: NOTE: We use certutil instead of PowerShell's Get-FileHash because cmd.exe
+:: misparses the closing ) in (Get-FileHash ...).Hash as the end of the for /f
+:: IN() block, breaking the command on some Windows versions. See GitHub #3.
+set "DOWNLOAD_HASH="
+for /f "skip=1 tokens=*" %%h in ('certutil -hashfile "%PYTHON_DIR%\python.zip" SHA256') do (
+    if not defined DOWNLOAD_HASH set "DOWNLOAD_HASH=%%h"
+)
+:: certutil outputs lowercase hex with spaces on some versions; normalize
+set "DOWNLOAD_HASH=!DOWNLOAD_HASH: =!"
 if /i not "!DOWNLOAD_HASH!"=="%PYTHON_SHA256%" (
     echo ERROR: Download verification failed! Hash mismatch.
     echo        Expected: %PYTHON_SHA256%
