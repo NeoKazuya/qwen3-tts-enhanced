@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+## 1.3.3 - 2026-01-31
+
+- Fixed preset speaker names to match Qwen3-TTS CustomVoice model (#7 by @CoLorenzo)
+- Fixed Windows `ConnectionResetError: [WinError 10054]` by switching to `WindowsSelectorEventLoopPolicy`
+
 ## 1.3.2 - 2026-01-28
 
 - PyTorch and matplotlib caches now stay in `cache/` folder instead of user home directory (#5)

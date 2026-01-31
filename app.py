@@ -6,6 +6,13 @@ Licensed under Apache License 2.0
 Based on Qwen3-TTS by Alibaba Cloud (https://github.com/QwenLM/Qwen3-TTS)
 """
 
+# Fix Windows ProactorEventLoop connection reset errors
+# Must be set before any asyncio usage
+import sys
+if sys.platform == "win32":
+    import asyncio
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 # Fix matplotlib/gradio compatibility issue
 import matplotlib
 matplotlib.use('Agg')
