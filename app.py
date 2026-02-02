@@ -227,39 +227,87 @@ def validate_voice_name(name):
     return name
 
 
+def _get_gradio_temp_dir():
+    """Create a unique temp directory inside Gradio's cache so delete_cache handles cleanup."""
+    gradio_cache = Path(tempfile.gettempdir()) / "gradio"
+    gradio_cache.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix="tts_", dir=gradio_cache))
+
+
 def save_audio(wav, sr, prefix="output", text="", auto_save=True):
-    """Save generated audio. If auto_save=False, saves to temp directory."""
+    """Save generated audio. If auto_save=False, saves to Gradio cache (auto-cleaned)."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     text_part = f"_{sanitize_filename(text)}" if text else ""
     filename = f"{prefix}{text_part}_{timestamp}.wav"
-    
+
     if auto_save:
         path = OUTPUTS_DIR / filename
     else:
-        # Use system temp dir - Gradio's delete_cache handles cleanup
-        path = Path(tempfile.gettempdir()) / filename
-    
+        path = _get_gradio_temp_dir() / filename
+
     sf.write(str(path), wav, sr)
     return str(path)
 
 
 def save_multiple_audio(wavs, sr, prefix="output", text="", auto_save=True):
-    """Save multiple audio variations. If auto_save=False, saves to temp directory."""
+    """Save multiple audio variations. If auto_save=False, saves to Gradio cache (auto-cleaned)."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     text_part = f"_{sanitize_filename(text)}" if text else ""
     paths = []
-    
+
     if auto_save:
         save_dir = OUTPUTS_DIR
     else:
-        # Use system temp dir - Gradio's delete_cache handles cleanup
-        save_dir = Path(tempfile.gettempdir())
-    
+        save_dir = _get_gradio_temp_dir()
+
     for i, wav in enumerate(wavs):
         path = save_dir / f"{prefix}{text_part}_{timestamp}_v{i+1}.wav"
         sf.write(str(path), wav, sr)
         paths.append(str(path))
     return paths
+
+
+def load_audio(path):
+    """Load audio from any format. Tries soundfile first, falls back to torchaudio."""
+    # soundfile handles WAV, FLAC, OGG natively
+    try:
+        audio, sr = sf.read(path)
+        if len(audio.shape) > 1:
+            audio = audio.mean(axis=1)
+        return audio, sr
+    except Exception:
+        pass
+    # Fallback: torchaudio can handle WebM, MP3, etc. via ffmpeg backend
+    try:
+        import torchaudio
+        wav, sr = torchaudio.load(path)
+        if wav.shape[0] > 1:
+            wav = wav.mean(dim=0)
+        else:
+            wav = wav.squeeze(0)
+        return wav.numpy(), sr
+    except Exception as e:
+        raise RuntimeError(
+            f"Could not load audio: {path}. "
+            f"If you recorded from microphone, ensure ffmpeg is installed. Error: {e}"
+        )
+
+
+def ensure_wav(path):
+    """Convert audio file to WAV if needed. Returns path to a WAV file."""
+    if path is None:
+        return None
+    # Already WAV — return as-is
+    try:
+        sf.read(path)
+        return path
+    except Exception:
+        pass
+    # Convert via load_audio (soundfile → torchaudio fallback chain)
+    audio, sr = load_audio(path)
+    wav_path = Path(_get_gradio_temp_dir()) / (Path(path).stem + ".wav")
+    sf.write(str(wav_path), audio, sr)
+    return str(wav_path)
 
 
 def normalize_audio(audio, target_peak=0.9):
@@ -305,11 +353,7 @@ def combine_audio_files(audio_paths, apply_noise_reduction=True):
 
     for path in valid_paths:
         try:
-            audio, sr = sf.read(path)
-
-            # Convert stereo to mono if needed
-            if len(audio.shape) > 1:
-                audio = audio.mean(axis=1)
+            audio, sr = load_audio(path)
 
             if target_sr is None:
                 target_sr = sr
@@ -402,10 +446,13 @@ def clone_generate(text, language, saved_voice_label, ref_audio, ref_text, num_v
             else:
                 if ref_audio is None:
                     return gr.update(visible=True), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), "❌ Upload reference audio or select a saved voice"
+                wav_path = ensure_wav(ref_audio)
+                has_transcript = bool(ref_text.strip())
                 wavs, sr = m.generate_voice_clone(
                     text=text, language=language,
-                    ref_audio=ref_audio,
-                    ref_text=ref_text if ref_text.strip() else None,
+                    ref_audio=wav_path,
+                    ref_text=ref_text if has_transcript else None,
+                    x_vector_only_mode=not has_transcript,
                 )
             all_wavs.append(wavs[0])
         
@@ -439,16 +486,17 @@ def clone_save(name, ref_audio, ref_text):
         return "❌ Invalid voice name", gr.update()
     
     try:
+        wav_path = ensure_wav(ref_audio)
         prompt = m.create_voice_clone_prompt(
-            ref_audio=ref_audio,
+            ref_audio=wav_path,
             ref_text=ref_text if ref_text.strip() else None,
             x_vector_only_mode=not bool(ref_text.strip()),
         )
-        
+
         # Save as .pt file (PyTorch format, compatible with original)
         torch.save(prompt, VOICES_DIR / f"{name}.pt")
-        
-        shutil.copy(ref_audio, VOICES_DIR / f"{name}.wav")
+
+        shutil.copy(wav_path, VOICES_DIR / f"{name}.wav")
         
         if ref_text.strip():
             with open(VOICES_DIR / f"{name}.txt", "w", encoding="utf-8") as f:
@@ -520,9 +568,7 @@ def create_voice_multi_ref(name, audio1, text1, audio2, text2, audio3, text3, au
     try:
         if len(audio_files) == 1:
             # Single file - process it
-            audio_data, sr = sf.read(audio_files[0])
-            if len(audio_data.shape) > 1:
-                audio_data = audio_data.mean(axis=1)
+            audio_data, sr = load_audio(audio_files[0])
             if denoise:
                 audio_data = clean_audio(audio_data, sr)
             audio_data = normalize_audio(audio_data, target_peak=0.9)
@@ -680,7 +726,7 @@ with gr.Blocks(title="Qwen3-TTS Enhanced", analytics_enabled=False, delete_cache
                         value="(None - use new audio)",
                         interactive=True,
                     )
-                    vc_ref_audio = gr.Audio(label="Reference Audio (3+ sec)", type="filepath", format="wav")
+                    vc_ref_audio = gr.Audio(label="Reference Audio (3+ sec)", type="filepath")
                     vc_ref_text = gr.Textbox(label="Transcript (optional, improves quality)", lines=2)
                     
                     gr.Markdown("### 💾 Save This Voice")
@@ -818,23 +864,23 @@ with gr.Blocks(title="Qwen3-TTS Enhanced", analytics_enabled=False, delete_cache
             
             with gr.Row():
                 with gr.Column():
-                    cv_audio1 = gr.Audio(label="Audio 1 (required)", type="filepath", format="wav")
+                    cv_audio1 = gr.Audio(label="Audio 1 (required)", type="filepath")
                     cv_text1 = gr.Textbox(label="Transcript 1", placeholder="What is said in audio 1...", lines=2)
                 with gr.Column():
-                    cv_audio2 = gr.Audio(label="Audio 2 (optional)", type="filepath", format="wav")
+                    cv_audio2 = gr.Audio(label="Audio 2 (optional)", type="filepath")
                     cv_text2 = gr.Textbox(label="Transcript 2", placeholder="What is said in audio 2...", lines=2)
 
             with gr.Row():
                 with gr.Column():
-                    cv_audio3 = gr.Audio(label="Audio 3 (optional)", type="filepath", format="wav")
+                    cv_audio3 = gr.Audio(label="Audio 3 (optional)", type="filepath")
                     cv_text3 = gr.Textbox(label="Transcript 3", placeholder="What is said in audio 3...", lines=2)
                 with gr.Column():
-                    cv_audio4 = gr.Audio(label="Audio 4 (optional)", type="filepath", format="wav")
+                    cv_audio4 = gr.Audio(label="Audio 4 (optional)", type="filepath")
                     cv_text4 = gr.Textbox(label="Transcript 4", placeholder="What is said in audio 4...", lines=2)
 
             with gr.Row():
                 with gr.Column():
-                    cv_audio5 = gr.Audio(label="Audio 5 (optional)", type="filepath", format="wav")
+                    cv_audio5 = gr.Audio(label="Audio 5 (optional)", type="filepath")
                     cv_text5 = gr.Textbox(label="Transcript 5", placeholder="What is said in audio 5...", lines=2)
                 with gr.Column():
                     cv_denoise = gr.Checkbox(
@@ -992,6 +1038,6 @@ if __name__ == "__main__":
         server_name="0.0.0.0",
         server_port=8000,
         inbrowser=True,
-        allowed_paths=[str(VOICES_DIR), str(OUTPUTS_DIR)],
+        allowed_paths=[str(VOICES_DIR), str(OUTPUTS_DIR), str(Path(tempfile.gettempdir()) / "gradio")],
         theme=gr.themes.Soft(),
     )

@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## 1.3.5 - 2026-02-02
+
+- Fixed microphone recording and playback by removing dependency on system ffmpeg (uses torchaudio's bundled codec support instead)
+- Fixed crash when generating speech from mic recording without a transcript
+- Fixed generated audio playback failing when auto-save is off (temp directory was not in Gradio's allowed paths)
+- Fixed generated audio temp files never being cleaned up (now properly managed by Gradio's cache cleanup)
+
 ## 1.3.4 - 2026-02-02
 
 - Fixed microphone/live recording broken on Gradio 6.x (browser records WebM but backend expected WAV; all audio inputs now auto-convert)
