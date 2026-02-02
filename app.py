@@ -275,11 +275,12 @@ def load_audio(path):
         if len(audio.shape) > 1:
             audio = audio.mean(axis=1)
         return audio, sr
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[audio] soundfile failed for {Path(path).name}: {e}")
     # Fallback: torchaudio can handle WebM, MP3, etc. via ffmpeg backend
     try:
         import torchaudio
+        print(f"[audio] trying torchaudio (backends: {torchaudio.list_audio_backends()})")
         wav, sr = torchaudio.load(path)
         if wav.shape[0] > 1:
             wav = wav.mean(dim=0)
@@ -287,9 +288,10 @@ def load_audio(path):
             wav = wav.squeeze(0)
         return wav.numpy(), sr
     except Exception as e:
+        print(f"[audio] torchaudio also failed: {e}")
         raise RuntimeError(
-            f"Could not load audio: {path}. "
-            f"If you recorded from microphone, ensure ffmpeg is installed. Error: {e}"
+            f"Could not load audio: {path} (ext={Path(path).suffix}, "
+            f"size={Path(path).stat().st_size if Path(path).exists() else 'missing'}). Error: {e}"
         )
 
 
@@ -301,12 +303,13 @@ def ensure_wav(path):
     try:
         sf.read(path)
         return path
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[audio] ensure_wav converting {Path(path).name} ({e})")
     # Convert via load_audio (soundfile → torchaudio fallback chain)
     audio, sr = load_audio(path)
     wav_path = Path(_get_gradio_temp_dir()) / (Path(path).stem + ".wav")
     sf.write(str(wav_path), audio, sr)
+    print(f"[audio]   converted to: {wav_path}")
     return str(wav_path)
 
 
@@ -421,11 +424,11 @@ def clone_generate(text, language, saved_voice_label, ref_audio, ref_text, num_v
     """Generate speech using saved voice or new reference."""
     if not text.strip():
         return gr.update(visible=True), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), "❌ Enter text to generate"
-    
+
     saved_voice = get_voice_value(saved_voice_label)
     m = get_clone_model()
     num_variations = max(1, int(num_variations))
-    
+
     try:
         all_wavs = []
         for i in range(num_variations):
@@ -455,11 +458,11 @@ def clone_generate(text, language, saved_voice_label, ref_audio, ref_text, num_v
                     x_vector_only_mode=not has_transcript,
                 )
             all_wavs.append(wavs[0])
-        
+
         # Save all variations
         voice_name = saved_voice if saved_voice else "clone"
         paths = save_multiple_audio(all_wavs, sr, voice_name, text, auto_save=auto_save)
-        
+
         # Return audio with visibility - only show players that have content
         results = []
         for i in range(5):
@@ -467,9 +470,11 @@ def clone_generate(text, language, saved_voice_label, ref_audio, ref_text, num_v
                 results.append(gr.update(value=paths[i], visible=True))
             else:
                 results.append(gr.update(value=None, visible=False))
-        
+
         return *results, f"✅ Generated {num_variations} variation(s)!"
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return gr.update(visible=True), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), f"❌ {e}"
 
 
@@ -504,6 +509,8 @@ def clone_save(name, ref_audio, ref_text):
         
         return f"✅ Voice '{name}' saved!", gr.update(choices=get_voice_choices())
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return f"❌ {e}", gr.update()
 
 
@@ -605,6 +612,8 @@ def create_voice_multi_ref(name, audio1, text1, audio2, text2, audio3, text3, au
             gr.update(choices=get_voice_choices())
         )
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return None, f"❌ {e}", gr.update()
 
 
@@ -613,19 +622,20 @@ def custom_generate(text, language, speaker, instruct, num_variations, auto_save
     """Generate speech with preset speaker."""
     if not text.strip():
         return gr.update(visible=True), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), "❌ Enter text to generate"
-    
+
     m = get_custom_model()
     num_variations = max(1, int(num_variations))
-    
+    instruct_val = instruct if instruct.strip() else None
+
     try:
         all_wavs = []
         for i in range(num_variations):
             wavs, sr = m.generate_custom_voice(
                 text=text, language=language, speaker=speaker,
-                instruct=instruct if instruct.strip() else None,
+                instruct=instruct_val,
             )
             all_wavs.append(wavs[0])
-        
+
         paths = save_multiple_audio(all_wavs, sr, f"{speaker}", text, auto_save=auto_save)
         results = []
         for i in range(5):
@@ -635,6 +645,8 @@ def custom_generate(text, language, speaker, instruct, num_variations, auto_save
                 results.append(gr.update(value=None, visible=False))
         return *results, f"✅ Generated {num_variations} variation(s)!"
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return gr.update(visible=True), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), f"❌ {e}"
 
 
@@ -645,10 +657,10 @@ def design_generate(text, language, instruct, num_variations, auto_save):
         return gr.update(visible=True), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), "❌ Enter text to generate"
     if not instruct.strip():
         return gr.update(visible=True), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), "❌ Enter a voice description"
-    
+
     m = get_design_model()
     num_variations = max(1, int(num_variations))
-    
+
     try:
         all_wavs = []
         for i in range(num_variations):
@@ -656,7 +668,7 @@ def design_generate(text, language, instruct, num_variations, auto_save):
                 text=text, language=language, instruct=instruct,
             )
             all_wavs.append(wavs[0])
-        
+
         paths = save_multiple_audio(all_wavs, sr, "design", text, auto_save=auto_save)
         results = []
         for i in range(5):
@@ -666,6 +678,8 @@ def design_generate(text, language, instruct, num_variations, auto_save):
                 results.append(gr.update(value=None, visible=False))
         return *results, f"✅ Generated {num_variations} variation(s)!"
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return gr.update(visible=True), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), f"❌ {e}"
 
 
@@ -705,6 +719,8 @@ def design_and_save(name, sample_text, language, instruct):
         
         return str(audio_path), f"✅ Voice '{name}' designed and saved!", gr.update(choices=get_voice_choices())
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return None, f"❌ {e}", gr.update()
 
 
@@ -726,7 +742,7 @@ with gr.Blocks(title="Qwen3-TTS Enhanced", analytics_enabled=False, delete_cache
                         value="(None - use new audio)",
                         interactive=True,
                     )
-                    vc_ref_audio = gr.Audio(label="Reference Audio (3+ sec)", type="filepath")
+                    vc_ref_audio = gr.Audio(label="Reference Audio (3+ sec)", type="filepath", format="wav")
                     vc_ref_text = gr.Textbox(label="Transcript (optional, improves quality)", lines=2)
                     
                     gr.Markdown("### 💾 Save This Voice")
@@ -864,23 +880,23 @@ with gr.Blocks(title="Qwen3-TTS Enhanced", analytics_enabled=False, delete_cache
             
             with gr.Row():
                 with gr.Column():
-                    cv_audio1 = gr.Audio(label="Audio 1 (required)", type="filepath")
+                    cv_audio1 = gr.Audio(label="Audio 1 (required)", type="filepath", format="wav")
                     cv_text1 = gr.Textbox(label="Transcript 1", placeholder="What is said in audio 1...", lines=2)
                 with gr.Column():
-                    cv_audio2 = gr.Audio(label="Audio 2 (optional)", type="filepath")
+                    cv_audio2 = gr.Audio(label="Audio 2 (optional)", type="filepath", format="wav")
                     cv_text2 = gr.Textbox(label="Transcript 2", placeholder="What is said in audio 2...", lines=2)
 
             with gr.Row():
                 with gr.Column():
-                    cv_audio3 = gr.Audio(label="Audio 3 (optional)", type="filepath")
+                    cv_audio3 = gr.Audio(label="Audio 3 (optional)", type="filepath", format="wav")
                     cv_text3 = gr.Textbox(label="Transcript 3", placeholder="What is said in audio 3...", lines=2)
                 with gr.Column():
-                    cv_audio4 = gr.Audio(label="Audio 4 (optional)", type="filepath")
+                    cv_audio4 = gr.Audio(label="Audio 4 (optional)", type="filepath", format="wav")
                     cv_text4 = gr.Textbox(label="Transcript 4", placeholder="What is said in audio 4...", lines=2)
 
             with gr.Row():
                 with gr.Column():
-                    cv_audio5 = gr.Audio(label="Audio 5 (optional)", type="filepath")
+                    cv_audio5 = gr.Audio(label="Audio 5 (optional)", type="filepath", format="wav")
                     cv_text5 = gr.Textbox(label="Transcript 5", placeholder="What is said in audio 5...", lines=2)
                 with gr.Column():
                     cv_denoise = gr.Checkbox(

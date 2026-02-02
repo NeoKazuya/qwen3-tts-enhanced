@@ -2,9 +2,16 @@
 
 ## [Unreleased]
 
+## 1.3.6 - 2026-02-02
+
+- Restored server-side WAV conversion for microphone recordings via Gradio's pydub+ffmpeg pipeline (torchaudio on Windows lacks ffmpeg backend, cannot convert WebM)
+- Added full traceback logging to console for all generation and save errors
+- Added diagnostic logging for audio format conversion failures
+- Known issue: Brave Browser produces silent mic recordings due to MediaRecorder API incompatibility ([gradio-app/gradio#10665](https://github.com/gradio-app/gradio/issues/10665)); use Chrome or Edge instead
+
 ## 1.3.5 - 2026-02-02
 
-- Fixed microphone recording and playback by removing dependency on system ffmpeg (uses torchaudio's bundled codec support instead)
+- Fixed microphone recording and playback (added ensure_wav helper with format conversion fallback chain)
 - Fixed crash when generating speech from mic recording without a transcript
 - Fixed generated audio playback failing when auto-save is off (temp directory was not in Gradio's allowed paths)
 - Fixed generated audio temp files never being cleaned up (now properly managed by Gradio's cache cleanup)
